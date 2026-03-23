@@ -89,12 +89,14 @@ class ClickHouse(BaseSQLQueryRunner):
             self._handle_run_query_error(error)
 
         for row in results["rows"]:
-            table_name = "{}.{}".format(row["database"], row["table"])
+            table_name = "`{}`.`{}`".format(row["database"], row["table"])
 
             if table_name not in schema:
                 schema[table_name] = {"name": table_name, "columns": []}
 
-            schema[table_name]["columns"].append({"name": row["name"], "type": row["data_type"]})
+            schema[table_name]["columns"].append(
+                {"name": row["name"], "type": row["data_type"]}
+            )
 
         return list(schema.values())
 
@@ -140,7 +142,9 @@ class ClickHouse(BaseSQLQueryRunner):
             return response
         except requests.RequestException as e:
             if e.response:
-                details = "({}, Status Code: {})".format(e.__class__.__name__, e.response.status_code)
+                details = "({}, Status Code: {})".format(
+                    e.__class__.__name__, e.response.status_code
+                )
             else:
                 details = "({})".format(e.__class__.__name__)
             raise Exception("Connection error to: {} {}.".format(url, details))
@@ -181,9 +185,13 @@ class ClickHouse(BaseSQLQueryRunner):
             if r["type"] in ("Int64", "UInt64", "Nullable(Int64)", "Nullable(UInt64)"):
                 columns_int64.append(column_name)
             else:
-                columns_totals[column_name] = "Total" if column_type == TYPE_STRING else None
+                columns_totals[column_name] = (
+                    "Total" if column_type == TYPE_STRING else None
+                )
 
-            columns.append({"name": column_name, "friendly_name": column_name, "type": column_type})
+            columns.append(
+                {"name": column_name, "friendly_name": column_name, "type": column_type}
+            )
 
         rows = response.get("data", [])
         for row in rows:
@@ -218,7 +226,9 @@ class ClickHouse(BaseSQLQueryRunner):
                 # for the first query
                 session_id = "redash_{}".format(uuid4().hex)
 
-                data = self._clickhouse_query(queries[0], session_id, session_check=False)
+                data = self._clickhouse_query(
+                    queries[0], session_id, session_check=False
+                )
 
                 for query in queries[1:]:
                     data = self._clickhouse_query(query, session_id, session_check=True)
