@@ -81,6 +81,7 @@ class ClickHouse(BaseSQLQueryRunner):
         SELECT database, table, name, type as data_type
         FROM system.columns
         WHERE database NOT IN ('system', 'information_schema', 'INFORMATION_SCHEMA')
+        AND table NOT LIKE '.inner_id.%'
         """
 
         results, error = self.run_query(query, None)
@@ -99,6 +100,16 @@ class ClickHouse(BaseSQLQueryRunner):
             )
 
         return list(schema.values())
+
+    def _get_tables_stats(self, tables_dict):
+        for t in tables_dict.keys():
+            if isinstance(tables_dict[t], dict):
+                try:
+                    res = self._run_query_internal("select count(*) as cnt from %s" % t)
+                    tables_dict[t]["size"] = res[0]["cnt"]
+                except Exception:
+                    logger.warning("Failed to get size for table %s", t)
+                    tables_dict[t]["size"] = None
 
     def _send_query(self, data, session_id=None, session_check=None):
         url = self.configuration.get("url", "http://127.0.0.1:8123")
