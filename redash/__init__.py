@@ -14,7 +14,7 @@ from redash.app import create_app  # noqa
 from redash.destinations import import_destinations
 from redash.query_runner import import_query_runners
 
-__version__ = "26.3.0-1"
+__version__ = "26.3.0-2"
 
 
 if os.environ.get("REMOTE_DEBUG"):
