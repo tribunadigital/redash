@@ -81,6 +81,7 @@ class ClickHouse(BaseSQLQueryRunner):
         SELECT database, table, name, type as data_type
         FROM system.columns
         WHERE database NOT IN ('system', 'information_schema', 'INFORMATION_SCHEMA')
+        AND table NOT LIKE '.inner_id.%'
         """
 
         results, error = self.run_query(query, None)
@@ -89,7 +90,7 @@ class ClickHouse(BaseSQLQueryRunner):
             self._handle_run_query_error(error)
 
         for row in results["rows"]:
-            table_name = "{}.{}".format(row["database"], row["table"])
+            table_name = "`{}`.`{}`".format(row["database"], row["table"])
 
             if table_name not in schema:
                 schema[table_name] = {"name": table_name, "columns": []}

@@ -73,6 +73,44 @@ simple_query_response = {
 
 
 class TestClickHouse(TestCase):
+    def test_get_tables_excludes_inner_tables_and_quotes_table_identifiers(self):
+        query_runner = ClickHouse({"url": "http://clickhouse:8123", "dbname": "default"})
+        query_runner.run_query = Mock(
+            return_value=(
+                {
+                    "rows": [
+                        {"database": "analytics", "table": "events", "name": "id", "data_type": "UInt64"},
+                        {"database": "analytics", "table": "events", "name": "name", "data_type": "String"},
+                        {"database": "analytics", "table": "events.2026", "name": "id", "data_type": "UInt64"},
+                    ]
+                },
+                None,
+            )
+        )
+        schema = {}
+
+        query_runner._get_tables(schema)
+
+        query, user = query_runner.run_query.call_args.args
+        self.assertIn("AND table NOT LIKE '.inner_id.%'", query)
+        self.assertIsNone(user)
+        self.assertEqual(
+            schema,
+            {
+                "`analytics`.`events`": {
+                    "name": "`analytics`.`events`",
+                    "columns": [
+                        {"name": "id", "type": "UInt64"},
+                        {"name": "name", "type": "String"},
+                    ],
+                },
+                "`analytics`.`events.2026`": {
+                    "name": "`analytics`.`events.2026`",
+                    "columns": [{"name": "id", "type": "UInt64"}],
+                },
+            },
+        )
+
     @patch("requests.post")
     def test_send_single_query(self, post_request):
         query_runner = ClickHouse({"url": "http://clickhouse:8123", "dbname": "system", "timeout": 60})
