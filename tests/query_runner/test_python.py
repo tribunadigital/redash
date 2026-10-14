@@ -1,9 +1,10 @@
 from datetime import datetime
+import unittest
 from unittest import TestCase
 
 import mock
 
-from redash.query_runner.python import Python
+from redash.query_runner.python import Python, pandas_installed
 from tests import BaseTestCase
 
 
@@ -113,6 +114,106 @@ class TestPythonQueryRunner(TestCase):
         self.assertIsNone(data)
         self.assertIsNotNone(error)
         self.assertFalse(hasattr(self.python.get_current_user, "compromised"))
+
+    def test_restricted_string_format_supports_flat_and_dynamic_values(self):
+        query_string = (
+            'value = "{}:{name}".format("flat", name="dynamic")\n'
+            'result = {"rows": [{"value": value}], "columns": []}'
+        )
+
+        data, error = self.python.run_query(query_string, "user")
+
+        self.assertIsNone(error)
+        self.assertEqual(data["rows"], [{"value": "flat:dynamic"}])
+
+    def test_restricted_string_format_method_alias_and_explicit_getattr(self):
+        query_string = (
+            'formatter = "{}:{}".format\n'
+            'value = formatter("alias", 2)\n'
+            'mapped = getattr("{name}", "format_map")({"name": "explicit"})\n'
+            'result = {"rows": [{"value": value, "mapped": mapped}], "columns": []}'
+        )
+
+        data, error = self.python.run_query(query_string, "user")
+
+        self.assertIsNone(error)
+        self.assertEqual(data["rows"], [{"value": "alias:2", "mapped": "explicit"}])
+
+    def test_restricted_string_format_rejects_private_traversal(self):
+        data, error = self.python.run_query('result = "{0.__class__}".format(())', "user")
+
+        self.assertIsNone(data)
+        self.assertIn("attribute and item traversal", error)
+
+    def test_configured_builtins_cannot_replace_attribute_guards(self):
+        python = Python({"additionalBuiltins": "getattr,setattr,delattr"})
+
+        data, error = python.run_query("getattr((), '__class__')", "user")
+
+        self.assertIsNone(data)
+        self.assertIn("__class__", error)
+
+    @unittest.skipUnless(pandas_installed, "pandas is not installed")
+    def test_restricted_pandas_writes_allow_public_data_operations(self):
+        python = Python({"allowedImportModules": "pandas"})
+        query_string = (
+            "import pandas as pd\n"
+            "df = pd.DataFrame({'date': [1], 'value': [0]})\n"
+            "df['value'] = [2]\n"
+            "df.date = [3]\n"
+            "df.loc[0, 'value'] = 4\n"
+            "series = pd.Series([5])\n"
+            "series.name = 'series'\n"
+            "result = {'rows': [{'date': df['date'][0], 'value': df['value'][0], 'series': series.name}], 'columns': []}"
+        )
+
+        data, error = python.run_query(query_string, "user")
+
+        self.assertIsNone(error)
+        self.assertEqual(data["rows"], [{"date": 3, "value": 4, "series": "series"}])
+
+    @unittest.skipUnless(pandas_installed, "pandas is not installed")
+    def test_restricted_pandas_iloc_scalar_formatting_supports_numeric_and_temporal_values(self):
+        python = Python({"allowedImportModules": "pandas"})
+        query_string = (
+            "import pandas as pd\n"
+            "integer = pd.Series([7], dtype='int64').iloc[0]\n"
+            "floating = pd.Series([1.25], dtype='float64').iloc[0]\n"
+            "timestamp = pd.Series([pd.Timestamp('2026-01-02 03:04:05.123456789')]).iloc[0]\n"
+            "timedelta = pd.Series([pd.Timedelta('2 days 03:04:05.123456789')]).iloc[0]\n"
+            "result = {'rows': [{'integer': '{}'.format(integer), 'floating': '{:.2f}'.format(floating), "
+            "'timestamp': '{}'.format(timestamp), 'timedelta': '{}'.format(timedelta)}], 'columns': []}"
+        )
+
+        data, error = python.run_query(query_string, "user")
+
+        self.assertIsNone(error)
+        self.assertEqual(
+            data["rows"],
+            [
+                {
+                    "integer": "7",
+                    "floating": "1.25",
+                    "timestamp": "2026-01-02 03:04:05.123456789",
+                    "timedelta": "2 days 03:04:05.123456789",
+                }
+            ],
+        )
+
+    @unittest.skipUnless(pandas_installed, "pandas is not installed")
+    def test_restricted_pandas_method_overwrite_and_subclass_are_denied(self):
+        python = Python({"allowedImportModules": "pandas"})
+        data, error = python.run_query("import pandas as pd\ndf = pd.DataFrame()\ndf.reset_index = 1", "user")
+
+        self.assertIsNone(data)
+        self.assertIsNotNone(error)
+
+        import pandas as pd
+
+        class DataFrameSubclass(pd.DataFrame):
+            pass
+
+        self.assertNotEqual(type(python.custom_write(DataFrameSubclass())), type(python.custom_write(pd.DataFrame())))
 
 
 class TestPythonQueryRunnerPermissions(BaseTestCase):

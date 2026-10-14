@@ -6,6 +6,7 @@ import sys
 from RestrictedPython import compile_restricted
 from RestrictedPython.Guards import (
     full_write_guard,
+    guarded_delattr,
     guarded_iter_unpack_sequence,
     guarded_setattr,
     guarded_unpack_sequence,
@@ -28,6 +29,7 @@ from redash.query_runner import (
     BaseQueryRunner,
     register,
 )
+from redash.query_runner.python_compat import PandasWriteProxy, make_compat_getattr
 from redash.utils.pandas import pandas_installed
 
 if pandas_installed:
@@ -41,6 +43,7 @@ else:
 
 
 logger = logging.getLogger(__name__)
+_GETATTR_DEFAULT = object()
 
 
 class CustomPrint:
@@ -127,6 +130,9 @@ class Python(BaseQueryRunner):
         self._script_locals = {"result": {"rows": [], "columns": [], "log": []}}
         self._enable_print_log = True
         self._custom_print = CustomPrint()
+        self._pandas_write_types = None
+        self._format_adapters = None
+        self._format_getattr = None
 
         if self.configuration.get("allowedImportModules", None):
             for item in self.configuration["allowedImportModules"].split(","):
@@ -155,13 +161,89 @@ class Python(BaseQueryRunner):
 
         raise Exception("'{0}' is not configured as a supported import module".format(name))
 
-    @staticmethod
-    def custom_write(obj):
+    def _get_pandas_write_types(self):
+        if not pandas_installed:
+            return None
+        if self._pandas_write_types is None:
+            dataframe = pd.DataFrame()
+            series = pd.Series(dtype="object")
+            self._pandas_write_types = (
+                pd.DataFrame,
+                pd.Series,
+                (type(dataframe.loc), type(series.loc)),
+                (type(dataframe.iloc), type(series.iloc)),
+            )
+        return self._pandas_write_types
+
+    def _pandas_write_proxy(self, obj):
+        return PandasWriteProxy.for_target(obj, self._get_pandas_write_types())
+
+    def _get_format_adapters(self):
+        if self._format_adapters is None:
+            if not pandas_installed:
+                self._format_adapters = ()
+                return self._format_adapters
+
+            import numpy as np
+
+            scalar_types = (
+                (np.bool_, bool),
+                (np.int8, int),
+                (np.int16, int),
+                (np.int32, int),
+                (np.int64, int),
+                (np.uint8, int),
+                (np.uint16, int),
+                (np.uint32, int),
+                (np.uint64, int),
+                (np.float16, float),
+                (np.float32, float),
+                (np.float64, float),
+            )
+            adapters = []
+            for host_type, native_type in scalar_types:
+                if not any(host_type is existing[0] for existing in adapters):
+                    adapters.append((host_type, native_type, host_type.__format__, host_type.item))
+            adapters.extend(
+                (
+                    (
+                        pd.Timestamp,
+                        "timestamp",
+                        pd.Timestamp.__format__,
+                        None,
+                        datetime.datetime.year,
+                        datetime.datetime.tzinfo,
+                    ),
+                    (pd.Timedelta, "timedelta", pd.Timedelta.__format__, None),
+                )
+            )
+            self._format_adapters = tuple(adapters)
+        return self._format_adapters
+
+    def _get_format_getattr(self):
+        if self._format_getattr is None:
+            self._format_getattr = make_compat_getattr(safer_getattr, self._get_format_adapters())
+        return self._format_getattr
+
+    def custom_write(self, obj):
         """
         Custom hooks which controls the way objects/lists/tuples/dicts behave in
         RestrictedPython
         """
-        return full_write_guard(obj)
+        return self._pandas_write_proxy(obj) or full_write_guard(obj)
+
+    def custom_setattr(self, obj, name, value):
+        proxy = self._pandas_write_proxy(obj)
+        if proxy is not None:
+            proxy.__setattr__(name, value)
+            return
+        guarded_setattr(obj, name, value)
+
+    def custom_getattr(self, obj, name, default=_GETATTR_DEFAULT):
+        compat_getattr = self._get_format_getattr()
+        if default is _GETATTR_DEFAULT:
+            return compat_getattr(obj, name)
+        return compat_getattr(obj, name, default)
 
     @staticmethod
     def custom_get_item(obj, key):
@@ -337,23 +419,27 @@ class Python(BaseQueryRunner):
             code = compile_restricted(query, "<string>", "exec")
 
             builtins = safe_builtins.copy()
+
+            # Layer in our own additional set of builtins that we have
+            # considered safe.
+            for key in self.safe_builtins:
+                builtins[key] = __builtins__[key]
+
+            # Guards must be installed after configured builtins so they cannot be replaced.
             builtins["_write_"] = self.custom_write
             builtins["__import__"] = self.custom_import
-            builtins["_getattr_"] = safer_getattr
-            builtins["getattr"] = safer_getattr
-            builtins["_setattr_"] = guarded_setattr
-            builtins["setattr"] = guarded_setattr
+            builtins["_getattr_"] = self.custom_getattr
+            builtins["getattr"] = self.custom_getattr
+            builtins["_setattr_"] = self.custom_setattr
+            builtins["setattr"] = self.custom_setattr
+            builtins["delattr"] = guarded_delattr
+            builtins["_delattr_"] = guarded_delattr
             builtins["_getitem_"] = self.custom_get_item
             builtins["_getiter_"] = self.custom_get_iter
             builtins["_print_"] = self._custom_print
             builtins["_unpack_sequence_"] = guarded_unpack_sequence
             builtins["_iter_unpack_sequence_"] = guarded_iter_unpack_sequence
             builtins["_inplacevar_"] = self.custom_inplacevar
-
-            # Layer in our own additional set of builtins that we have
-            # considered safe.
-            for key in self.safe_builtins:
-                builtins[key] = __builtins__[key]
 
             restricted_globals = dict(__builtins__=builtins)
             restricted_globals["get_query_result"] = self.get_query_result

@@ -2259,7 +2259,7 @@ wheels = [
 
 [[package]]
 name = "redash"
-version = "26.9.0.post2"
+version = "26.9.0.post3"
 source = { virtual = "." }
 dependencies = [
     { name = "advocate" },
