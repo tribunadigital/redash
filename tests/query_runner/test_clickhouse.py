@@ -113,7 +113,15 @@ class TestClickHouse(TestCase):
 
     @patch("requests.post")
     def test_send_single_query(self, post_request):
-        query_runner = ClickHouse({"url": "http://clickhouse:8123", "dbname": "system", "timeout": 60})
+        query_runner = ClickHouse(
+            {
+                "url": "http://clickhouse:8123",
+                "dbname": "system",
+                "timeout": 60,
+                "user": "reader",
+                "password": "s3cret",
+            }
+        )
 
         response = Mock()
         response.status_code = 200
@@ -139,15 +147,15 @@ class TestClickHouse(TestCase):
         (url,), kwargs = post_request.call_args
         self.assertEqual(url, "http://clickhouse:8123")
         self.assertEqual(kwargs["data"], b"SELECT 1\nFORMAT JSON")
+        # Credentials must never be sent in the URL query string.
         self.assertEqual(
             kwargs["params"],
             {
-                "user": "default",
-                "password": "",
                 "database": "system",
                 "default_format": "JSON",
             },
         )
+        self.assertEqual(kwargs["auth"], ("reader", "s3cret"))
         self.assertEqual(kwargs["timeout"], 60)
 
     @patch("requests.post")
