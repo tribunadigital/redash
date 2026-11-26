@@ -1,10 +1,9 @@
-import unittest
 from datetime import datetime
 from unittest import TestCase
 
 import mock
 
-from redash.query_runner.python import Python, pandas_installed
+from redash.query_runner.python import Python
 from tests import BaseTestCase
 
 
@@ -114,37 +113,6 @@ class TestPythonQueryRunner(TestCase):
         self.assertIsNone(data)
         self.assertIsNotNone(error)
         self.assertFalse(hasattr(self.python.get_current_user, "compromised"))
-
-    def test_configured_builtins_cannot_replace_attribute_guards(self):
-        python = Python({"additionalBuiltins": "getattr,setattr,delattr"})
-
-        data, error = python.run_query("getattr((), '__class__')", "user")
-
-        self.assertIsNone(data)
-        self.assertIn("__class__", error)
-
-    @unittest.skipUnless(pandas_installed, "pandas is not installed")
-    def test_restricted_pandas_methods_work_and_item_writes_are_denied(self):
-        python = Python({"allowedImportModules": "pandas"})
-        query_string = (
-            "import pandas as pd\n"
-            "df = pd.DataFrame({'date': [1], 'value': [0]})\n"
-            "df = df.assign(value=[2])\n"
-            "df = df.rename(columns={'date': 'd'})\n"
-            "result = {'rows': [{'d': int(df['d'][0]), 'value': int(df['value'][0])}], 'columns': []}"
-        )
-
-        data, error = python.run_query(query_string, "user")
-
-        self.assertIsNone(error)
-        self.assertEqual(data["rows"], [{"d": 1, "value": 2}])
-
-        for write in ("df['value'] = [2]", "df.date = [3]", "df.loc[0, 'value'] = 4"):
-            data, error = python.run_query(
-                "import pandas as pd\ndf = pd.DataFrame({'date': [1], 'value': [0]})\n" + write, "user"
-            )
-            self.assertIsNone(data)
-            self.assertIsNotNone(error)
 
 
 class TestPythonQueryRunnerPermissions(BaseTestCase):

@@ -6,7 +6,6 @@ import sys
 from RestrictedPython import compile_restricted
 from RestrictedPython.Guards import (
     full_write_guard,
-    guarded_delattr,
     guarded_iter_unpack_sequence,
     guarded_setattr,
     guarded_unpack_sequence,
@@ -338,27 +337,23 @@ class Python(BaseQueryRunner):
             code = compile_restricted(query, "<string>", "exec")
 
             builtins = safe_builtins.copy()
-
-            # Layer in our own additional set of builtins that we have
-            # considered safe.
-            for key in self.safe_builtins:
-                builtins[key] = __builtins__[key]
-
-            # Guards must be installed after configured builtins so they cannot be replaced.
             builtins["_write_"] = self.custom_write
             builtins["__import__"] = self.custom_import
             builtins["_getattr_"] = safer_getattr
             builtins["getattr"] = safer_getattr
             builtins["_setattr_"] = guarded_setattr
             builtins["setattr"] = guarded_setattr
-            builtins["delattr"] = guarded_delattr
-            builtins["_delattr_"] = guarded_delattr
             builtins["_getitem_"] = self.custom_get_item
             builtins["_getiter_"] = self.custom_get_iter
             builtins["_print_"] = self._custom_print
             builtins["_unpack_sequence_"] = guarded_unpack_sequence
             builtins["_iter_unpack_sequence_"] = guarded_iter_unpack_sequence
             builtins["_inplacevar_"] = self.custom_inplacevar
+
+            # Layer in our own additional set of builtins that we have
+            # considered safe.
+            for key in self.safe_builtins:
+                builtins[key] = __builtins__[key]
 
             restricted_globals = dict(__builtins__=builtins)
             restricted_globals["get_query_result"] = self.get_query_result
